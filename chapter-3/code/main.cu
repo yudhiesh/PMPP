@@ -26,7 +26,7 @@ __global__ void blurKernel(float *Pin, float *Pout, int width, int height,
 
   if (col < width && row < height) {
     // Process each RGB channel
-    for (int c = 0; c < 3; ++c) {
+    for (int channel = 0; channel < 3; ++channel) {
       float pixVal = 0.0f;
       int pixels = 0;
 
@@ -36,13 +36,16 @@ __global__ void blurKernel(float *Pin, float *Pout, int width, int height,
           int curCol = col + blurCol;
 
           if (curRow >= 0 && curRow < height && curCol >= 0 && curCol < width) {
-            pixVal += Pin[(curRow * width + curCol) * 3 + c];
+            // pixel_number = (row * width + col)
+            // memory position = pixel_number * 3
+            // channel_offset = c
+            pixVal += Pin[(curRow * width + curCol) * 3 + channel];
             ++pixels;
           }
         }
       }
 
-      Pout[(row * width + col) * 3 + c] = pixVal / pixels;
+      Pout[(row * width + col) * 3 + channel] = pixVal / pixels;
     }
   }
 }
