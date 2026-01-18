@@ -1,0 +1,7 @@
+-x
+cuda
+--cuda-gpu-arch=sm_120
+-std=c++17
+-I/home/yudhiesh/Projects/PMPP/chapter-3/code/.venv/lib/python3.12/site-packages/torch/include
+-I/home/yudhiesh/Projects/PMPP/chapter-3/code/.venv/lib/python3.12/site-packages/torch/include/torch/csrc/api/include
+-I/usr/local/cuda/include
