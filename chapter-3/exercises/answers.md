@@ -98,10 +98,18 @@ Consider a 2D matrix with a width of 400 and a height of 500. The matrix is stor
 
 **a.** If the matrix is stored in row-major order.
 
+row-major: row _width + col = 20_ 400 + 10 = 8010
+
 **b.** If the matrix is stored in column-major order.
+
+column-major: col _height + row = 10_ 500 + 20 = 5020
 
 ---
 
 ## 5. 3D Tensor Indexing
 
 Consider a 3D tensor with a width of 400, a height of 500, and a depth of 300. The tensor is stored as a one-dimensional array in row-major order. Specify the array index of the tensor element at **x=10**, **y=20**, and **z=5**.
+
+index = z × (height × width) + y × width + x
+
+index = 1,008,010
