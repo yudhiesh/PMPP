@@ -73,13 +73,24 @@ _[See image]_
 
 **a.** What is the number of threads per block?
 
+16 \* 32 = 512
+
 **b.** What is the number of threads in the grid?
 
+gridDim.x _#threads = 19_ 16 = 304
+gridDim.y _#threads = 5_ 32 = 160
+
+304 x 160 = 54400
+
 **c.** What is the number of blocks in the grid?
+gridDim.x = 19
+gridDim.y = 5
+
+19 \* 5 = 95
 
 **d.** What is the number of threads that execute the code on line 05?
 
----
+## MxN=150\*300=45000
 
 ## 4. 2D Matrix Indexing
 
