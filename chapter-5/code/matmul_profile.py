@@ -7,6 +7,8 @@ Based on GPU MODE Lecture 1 profiling techniques.
 
 from pathlib import Path
 from typing import Literal, Callable
+import re
+import hashlib
 import torch
 from torch.utils.cpp_extension import load_inline
 from torch.profiler import profile, ProfilerActivity
@@ -19,10 +21,21 @@ torch::Tensor matmul_naive(torch::Tensor A, torch::Tensor B);
 torch::Tensor matmul_row_per_thread(torch::Tensor A, torch::Tensor B);
 torch::Tensor matmul_col_per_thread(torch::Tensor A, torch::Tensor B);
 torch::Tensor matmul_tiled(torch::Tensor A, torch::Tensor B);
+torch::Tensor matmul_tiled_8(torch::Tensor A, torch::Tensor B);
+torch::Tensor matmul_tiled_16(torch::Tensor A, torch::Tensor B);
+torch::Tensor matmul_tiled_32(torch::Tensor A, torch::Tensor B);
+torch::Tensor matmul_tiled_dynamic(torch::Tensor A, torch::Tensor B, int tile_width);
 """
 
 SUPPORTED_KERNELS = Literal[
-    "naive", "row_per_thread", "col_per_thread", "pytorch", "tiled"
+    "naive",
+    "row_per_thread",
+    "col_per_thread",
+    "pytorch",
+    "tiled",
+    "tiled_8",
+    "tiled_16",
+    "tiled_32",
 ]
 DEFAULT_KERNELS = [
     "pytorch",
@@ -129,20 +142,32 @@ def profile_with_torch_profiler(
 def compile_cuda_kernels(cuda_file_path: Path, cpp_source: str, verbose: bool = True):
     """Compile and load the CUDA matmul kernels."""
     cuda_source = cuda_file_path.read_text()
+    function_names = re.findall(r"torch::Tensor\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", cpp_source)
+
+    if not function_names:
+        raise ValueError("No torch::Tensor function declarations found in cpp_source")
+
+    binding_lines = "\n".join(
+        f'  m.def("{name}", &{name}, "{name}");' for name in function_names
+    )
+    binding_cpp_source = (
+        "#include <torch/extension.h>\n"
+        f"{cpp_source}\n\n"
+        "PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {\n"
+        f"{binding_lines}\n"
+        "}\n"
+    )
+    extension_name = "matmul_kernels_" + hashlib.sha1(
+        (binding_cpp_source + cuda_source).encode("utf-8")
+    ).hexdigest()[:10]
 
     if verbose:
         print("Compiling CUDA kernels...")
 
     module = load_inline(
-        name="matmul_kernels",
-        cpp_sources=cpp_source,
+        name=extension_name,
+        cpp_sources=binding_cpp_source,
         cuda_sources=cuda_source,
-        functions=[
-            "matmul_naive",
-            "matmul_row_per_thread",
-            "matmul_col_per_thread",
-            "matmul_tiled",
-        ],
         verbose=verbose,
         extra_cuda_cflags=["-O3"],
     )
@@ -183,14 +208,40 @@ def verify_correctness(
 
 def get_kernel_func(module, kernel_name: str) -> Callable | None:
     """Get the kernel function by name."""
+    if kernel_name.startswith("tiled_"):
+        _, _, width = kernel_name.partition("_")
+        if width.isdigit():
+            tile_width = int(width)
+            return lambda A, B: module.matmul_tiled_dynamic(A, B, tile_width)
+        tiled_name = f"matmul_tiled_{width}"
+        return getattr(module, tiled_name, None)
+    if kernel_name == "tiled":
+        return module.matmul_tiled
+
     kernel_map = {
         "pytorch": torch.matmul,
         "naive": module.matmul_naive,
         "row_per_thread": module.matmul_row_per_thread,
         "col_per_thread": module.matmul_col_per_thread,
-        "tiled": module.matmul_tiled,
     }
     return kernel_map.get(kernel_name)
+
+
+def expand_kernels(kernels: list[str], tile_widths: list[int]) -> list[str]:
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for name in kernels:
+        if name == "tiled":
+            for w in tile_widths:
+                expanded_name = f"tiled_{w}"
+                if expanded_name not in seen:
+                    expanded.append(expanded_name)
+                    seen.add(expanded_name)
+        else:
+            if name not in seen:
+                expanded.append(name)
+                seen.add(name)
+    return expanded
 
 
 def run_benchmark(
@@ -237,6 +288,7 @@ def main(
     num_warmup: int = 5,
     num_iterations: int = 20,
     verbose: bool = True,
+    tile_widths: list[int] | None = None,
 ):
     """
     Main profiling routine.
@@ -251,6 +303,7 @@ def main(
     module = compile_cuda_kernels(cuda_file_path, cpp_source, verbose=verbose)
 
     all_results = {}
+    expanded_kernels = expand_kernels(kernels, tile_widths or [16])
 
     for M, N, K in matrix_sizes:
         print(f"\n{'=' * 60}")
@@ -264,7 +317,7 @@ def main(
 
         # Verify correctness
         print("\nCorrectness check:")
-        for kernel_name in kernels:
+        for kernel_name in expanded_kernels:
             if kernel_name == "pytorch":
                 continue
             func = get_kernel_func(module, kernel_name)
@@ -278,7 +331,7 @@ def main(
             print(
                 f"\nTiming benchmark ({num_iterations} iterations, {num_warmup} warmup):"
             )
-            results = run_benchmark(module, A, B, kernels, num_warmup, num_iterations)
+            results = run_benchmark(module, A, B, expanded_kernels, num_warmup, num_iterations)
             all_results[f"{M}x{N}x{K}"] = results
 
             # Print speedup summary
@@ -293,7 +346,7 @@ def main(
         # Autograd profiler
         if profile_mode in ("autograd", "all"):
             print("\n--- Autograd Profiler ---")
-            for kernel_name in kernels:
+            for kernel_name in expanded_kernels:
                 func = get_kernel_func(module, kernel_name)
                 if func is None:
                     continue
@@ -304,7 +357,7 @@ def main(
         # Torch profiler with optional trace export
         if profile_mode in ("profiler", "all"):
             print("\n--- Torch Profiler ---")
-            for kernel_name in kernels:
+            for kernel_name in expanded_kernels:
                 func = get_kernel_func(module, kernel_name)
                 if func is None:
                     continue
@@ -351,13 +404,16 @@ Examples:
 
   # Only compare specific kernels
   python matmul_profile.py -s 2048 -k naive row_per_thread pytorch
+  
+  # Compare multiple tiled variants
+  python matmul_profile.py -s 1024 -k tiled --tile-widths 8 16 32
 
 Available kernels:
   - pytorch        : PyTorch's native torch.matmul (cuBLAS)
   - naive          : One thread per output element
   - row_per_thread : One thread computes entire output row
   - col_per_thread : One thread computes entire output column
-  - tiled          : Matmul leveraging tiling + shared memory
+  - tiled          : Matmul leveraging tiling + shared memory (see --tile-widths)
         """,
     )
     parser.add_argument(
@@ -415,11 +471,20 @@ Available kernels:
         action="store_true",
         help="Reduce verbosity",
     )
+    parser.add_argument(
+        "--tile-widths",
+        type=int,
+        nargs="+",
+        default=[16],
+        help="Tile widths for the tiled kernel (default: 16, valid range: 1-32)",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    if any(w < 1 or w > 32 for w in args.tile_widths):
+        raise SystemExit("--tile-widths values must be in the range [1, 32]")
 
     # Build matrix sizes list
     matrix_sizes = []
@@ -443,4 +508,5 @@ if __name__ == "__main__":
         num_warmup=args.warmup,
         num_iterations=args.iterations,
         verbose=not args.quiet,
+        tile_widths=args.tile_widths,
     )

@@ -18,6 +18,9 @@ def cuda_module():
             "torch::Tensor matmul_row_per_thread(torch::Tensor A, torch::Tensor B);\n"
             "torch::Tensor matmul_col_per_thread(torch::Tensor A, torch::Tensor B);\n"
             "torch::Tensor matmul_tiled(torch::Tensor A, torch::Tensor B);\n"
+            "torch::Tensor matmul_tiled_8(torch::Tensor A, torch::Tensor B);\n"
+            "torch::Tensor matmul_tiled_16(torch::Tensor A, torch::Tensor B);\n"
+            "torch::Tensor matmul_tiled_32(torch::Tensor A, torch::Tensor B);\n"
         ),
         verbose=False,
     )
